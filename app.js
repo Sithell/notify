@@ -5,9 +5,27 @@ const axios = require('axios');
 const qs = require('qs');
 const express = require('express');
 
-const redirectUri = "http://f53d168320ae.ngrok.io";
-const clientId = "fb7eab063ff44d4da7b8dd39ad2678dd";
-const clientSecret = "b901ef78db324303af96b5d1d5afdc90";
+function refreshToken(chatId) {
+    axios.post(
+        'https://accounts.spotify.com/api/token',
+        qs.stringify({
+            grant_type: 'refresh_token',
+            refresh_token: result[0].refresh_token
+        }),
+        {
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded"
+            },
+            auth: {
+                username: clientId,
+                password: clientSecret
+            }
+        }).then(response => {
+            const new_token = response.data.access_token;
+            conn.query(`UPDATE users SET access_token="${new_token}" WHERE chat_id=${chatId}`);
+    })
+}
+
 // Database
 const conn = mysql.createConnection(config.get('App.mysql'));
 conn.connect();
@@ -16,15 +34,11 @@ conn.connect();
 const app = express();
 
 app.get('/', (req, res) => {
-    res.send('Успешная авторизация, <a href="http://t.me/spotifications_bot">вернуться в телеграм</a>');
-    const code = req.query.code;
-    var chatId = req.query.state;
-
     axios.post('https://accounts.spotify.com/api/token',
         qs.stringify({
             grant_type: 'authorization_code',
             redirect_uri: config.get('App.spotify.redirectUri'),
-            code: code
+            code: req.query.code
         }), {
             headers: {
                 "Content-Type": "application/x-www-form-urlencoded"
@@ -43,6 +57,8 @@ app.get('/', (req, res) => {
             refresh_token=VALUES(refresh_token);`
         );
         console.log("Токен получен и записан в базу");
+        setInterval(() => { refreshToken(msg.chat.id) }, response.data.expires_in * 1000);
+
     }).catch(err => {
         console.log("Error");
     });
@@ -51,6 +67,7 @@ app.get('/', (req, res) => {
 app.listen(config.get('App.server.port'), () => {
     console.log(`Server running at ${config.get('App.server.host')}:${config.get('App.server.port')}`)
 });
+
 
 
 // Bot
