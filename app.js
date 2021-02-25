@@ -49,18 +49,25 @@ app.get('/', (req, res) => {
             }
         }
     ).then(response => {
+        const chatId = req.query.state;
         conn.query(
             `INSERT INTO users (chat_id, access_token, refresh_token)
-            VALUES (${req.query.state}, "${response.data.access_token}", "${response.data.refresh_token}")
+            VALUES (${chatId}, "${response.data.access_token}", "${response.data.refresh_token}")
             ON DUPLICATE KEY UPDATE
             access_token=VALUES(access_token),
             refresh_token=VALUES(refresh_token);`
         );
-        console.log("Токен получен и записан в базу");
-        setInterval(() => { refreshToken(msg.chat.id) }, response.data.expires_in * 1000);
+        // Автоматически обновляем токен
+        setInterval(() => { refreshToken(chatId) }, response.data.expires_in * 1000);
+        // Сообщаем о том, что авторизация прошла успешно
+        // TODO изменить текст кнопки для авторизации
+        bot.sendMessage(chatId, "Вы успешно авторизованы");
+        // Перенаправляем пользователя обратно в телеграм
+        res.redirect(config.get("App.telegram.uri"));
 
     }).catch(err => {
         console.log("Error");
+        console.dir(err);
     });
 });
 
