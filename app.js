@@ -48,10 +48,25 @@ function daysPassedSince(time) {
     return Math.ceil((Date.parse(new Date()) - time) / 1000 / 60 / 60 / 24);
 }
 function secondsPassedSince(time) {
-    return Math.ceil((Date.parse(new Date()) - time) / 1000 / 60);
+    return Math.ceil((Date.parse(new Date()) - time) / 1000);
 }
 function playlistId(uri) {
     return urlapi.parse(uri).pathname.split('/')[2];
+}
+function getPlaylist(chatId, uri, callback) {
+    const playlistId = urlapi.parse(uri).pathname.split('/')[2];
+    conn.query(`SELECT * FROM users WHERE chat_id=${chatId}`, (err, result, fields) => {
+        axios.get(
+            `https://api.spotify.com/v1/playlists/${playlistId}`,
+            {
+                headers: {
+                    "Authorization": `Bearer ${result[0].access_token}`
+                }
+            }
+        ).then(response => {
+            callback(response.data);
+        });
+    });
 }
 
 function update() {
@@ -59,38 +74,17 @@ function update() {
         'SELECT * FROM playlists',
         (err, playlists, fields) => {
             for (let i=0; i < playlists.length; i++) {
-                conn.query(
-                    `SELECT * FROM users WHERE chat_id=${playlists[i].user_id};`,
-                    (e, users, f) => {
-                        const playlist_id = playlistId(playlists[i].uri);
-                        axios.get(
-                            `https://api.spotify.com/v1/playlists/${playlist_id}`,
-                            {
-                                headers: {
-                                    "Authorization": `Bearer ${users[0].access_token}`
-                                }
-                            }
-                        ).then(response => {
-                            // response - плейлист полученный от spotify
-                            const lastTimeUpdated = lastUpdatedAt(response.data);
-                            const diff = Math.abs(playlists[i].updated_at - lastTimeUpdated);
-
-                            if (diff > 0) {
-                                bot.sendMessage(
-                                    users[0].chat_id,
-                                    `Плейлист ${response.data.name} обновился ${secondsPassedSince(lastTimeUpdated)} секунд назад`,
-                                    {
-                                        reply_markup: JSON.stringify({
-                                            inline_keyboard: [[{
-                                                text: "Открыть Spotify",
-                                                url: playlists[i].uri
-                                            }]]
-                                        })
-                                    }
-                                );
-                                conn.query(`UPDATE playlists SET updated_at=${lastTimeUpdated} WHERE user_id=${users[0].chat_id};`);
-                            }
-                        });
+                getPlaylist(
+                    playlists[i].user_id,
+                    playlists[i].uri,
+                    (playlist) => {
+                        const lastTimeUpdated = lastUpdatedAt(playlist);
+                        const diff = lastTimeUpdated - playlists[i].updated_at;
+                        bot.sendMessage(playlist[i].user_id, playlist.name + " " + diff);
+                        conn.query(
+                            `UPDATE playlists SET updated_at=${lastTimeUpdated} 
+                                WHERE user_id=${playlists[i].user_id} AND uri="${playlists[i].uri}";`
+                        );
                     }
                 );
             }
@@ -131,23 +125,16 @@ function start(msg, match) {
 
 function add(msg, match) {
     const uri = match[1];
-    const playlist_id = urlapi.parse(uri).pathname.split('/')[2];
-    conn.query(`SELECT * FROM users WHERE chat_id=${msg.chat.id}`, (err, result, fields) => {
-        axios.get(
-            `https://api.spotify.com/v1/playlists/${playlist_id}`,
-            {
-                headers: {
-                    "Authorization": `Bearer ${result[0].access_token}`
-                }
-            }
-        ).then(response => {
-            const lastTimeUpdated = lastUpdatedAt(response.data);
-            conn.query(
-                `INSERT INTO playlists (user_id, updated_at, uri) VALUES (${msg.chat.id}, ${lastTimeUpdated}, "${uri}");`
-            )
-            bot.sendMessage(msg.chat.id, `Плейлист ${response.data.name} добавлен в список отслеживаемых`);
-            bot.sendMessage(msg.chat.id, `В последний раз он обновлялся ${daysPassedSince(lastTimeUpdated)} дней назад`);
-        });
+    getPlaylist(msg.chat.id, uri, (playlist) => {
+        const lastTimeUpdated = lastUpdatedAt(playlist);
+        conn.query(
+            `INSERT INTO playlists (user_id, updated_at, uri) VALUES (${msg.chat.id}, ${lastTimeUpdated}, "${uri}");`
+        )
+        bot.sendMessage(
+            msg.chat.id,
+            `Плейлист ${playlist.name} добавлен в список отслеживаемых
+            В последний раз он обновлялся ${daysPassedSince(lastTimeUpdated)} дней назад`
+        );
     });
 }
 
@@ -180,14 +167,10 @@ function auth(req, res) {
         // Автоматически обновляем токен
         setInterval(() => { refreshToken(chatId) }, response.data.expires_in * 1000);
         // Сообщаем о том, что авторизация прошла успешно
-        // TODO изменить текст кнопки для авторизации
+        // TODO изменить текст кнопки после авторизации
         bot.sendMessage(chatId, "Вы успешно авторизованы");
         // Перенаправляем пользователя обратно в телеграм
         res.redirect(config.get("App.telegram.uri"));
-
-    }).catch(err => {
-        console.log("Error");
-        console.dir(err);
     });
 }
 
@@ -213,5 +196,9 @@ bot.onText(/\/start/, start);
 bot.onText(/\/add (.+)/, add);
 bot.onText(/\/update/, (msg, match) => {update()});
 bot.onText(/\/refresh/, (msg, match) => {refreshToken(msg.chat.id)});
+bot.onText(/\/check (.+)/, (msg, match) => {
+    const uri = match[1];
 
-setInterval(update, 3000);
+    bot.sendMessage(msg.chat.id, match[1]);
+});
+// setInterval(update, 3000);
