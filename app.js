@@ -81,7 +81,18 @@ function update() {
                         const lastTimeUpdated = lastUpdatedAt(playlist);
                         const diff = lastTimeUpdated - playlists[i].updated_at;
                         if (diff > 0) {
-                            bot.sendMessage(playlists[i].user_id, playlist.name + " " + diff);
+                            bot.sendMessage(
+                                playlists[i].user_id,
+                                `Плейлист ${playlist.name} только что обновился`,
+                                {
+                                    reply_markup: JSON.stringify({
+                                        inline_keyboard: [[{
+                                            text: "Открыть Spotify",
+                                            url: `https://open.spotify.com/playlist/${playlists[i].id}`
+                                        }]]
+                                    })
+                                }
+                            );
                             conn.query(
                                 `UPDATE playlists SET updated_at=${lastTimeUpdated} 
                                 WHERE user_id=${playlists[i].user_id} AND id="${playlists[i].id}";`
@@ -171,9 +182,7 @@ function show(msg, match) {
 }
 
 function unsubscribe(chatId, playlistId) {
-    conn.query(`DELETE FROM playlists WHERE user_id=${chatId} AND id="${playlistId}";`, (err, result, fields) => {
-        console.log(err, result, fields);
-    });
+    conn.query(`DELETE FROM playlists WHERE user_id=${chatId} AND id="${playlistId}";`);
 }
 
 // Routes
