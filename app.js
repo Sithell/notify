@@ -50,11 +50,11 @@ function daysPassedSince(time) {
 function secondsPassedSince(time) {
     return Math.ceil((Date.parse(new Date()) - time) / 1000);
 }
-function playlistId(uri) {
+function getPlaylistId(uri) {
     return urlapi.parse(uri).pathname.split('/')[2];
 }
-function getPlaylist(chatId, uri, callback) {
-    const playlistId = urlapi.parse(uri).pathname.split('/')[2];
+
+function getPlaylist(chatId, playlistId, callback) {
     conn.query(`SELECT * FROM users WHERE chat_id=${chatId}`, (err, result, fields) => {
         axios.get(
             `https://api.spotify.com/v1/playlists/${playlistId}`,
@@ -76,15 +76,17 @@ function update() {
             for (let i=0; i < playlists.length; i++) {
                 getPlaylist(
                     playlists[i].user_id,
-                    playlists[i].uri,
+                    playlists[i].id,
                     (playlist) => {
                         const lastTimeUpdated = lastUpdatedAt(playlist);
                         const diff = lastTimeUpdated - playlists[i].updated_at;
-                        bot.sendMessage(playlist[i].user_id, playlist.name + " " + diff);
-                        conn.query(
-                            `UPDATE playlists SET updated_at=${lastTimeUpdated} 
-                                WHERE user_id=${playlists[i].user_id} AND uri="${playlists[i].uri}";`
-                        );
+                        if (diff > 0) {
+                            bot.sendMessage(playlists[i].user_id, playlist.name + " " + diff);
+                            conn.query(
+                                `UPDATE playlists SET updated_at=${lastTimeUpdated} 
+                                WHERE user_id=${playlists[i].user_id} AND id="${playlists[i].id}";`
+                            );
+                        }
                     }
                 );
             }
@@ -124,17 +126,53 @@ function start(msg, match) {
 }
 
 function add(msg, match) {
-    const uri = match[1];
-    getPlaylist(msg.chat.id, uri, (playlist) => {
+    const id = getPlaylistId(match[1]);
+    getPlaylist(msg.chat.id, id, (playlist) => {
         const lastTimeUpdated = lastUpdatedAt(playlist);
         conn.query(
-            `INSERT INTO playlists (user_id, updated_at, uri) VALUES (${msg.chat.id}, ${lastTimeUpdated}, "${uri}");`
+            `INSERT INTO playlists (id, user_id, updated_at) VALUES ("${id}", ${msg.chat.id}, ${lastTimeUpdated});`
         )
         bot.sendMessage(
             msg.chat.id,
             `Плейлист ${playlist.name} добавлен в список отслеживаемых
             В последний раз он обновлялся ${daysPassedSince(lastTimeUpdated)} дней назад`
         );
+    });
+}
+
+function show(msg, match) {
+    conn.query(
+        `SELECT * FROM playlists WHERE user_id=${msg.chat.id};`,
+        (err, playlists, fields) => {
+            if (playlists.length === 0) {
+                bot.sendMessage(msg.chat.id, "Нет отслеживаемых плейлистов, используйте команду /add <ссылка на плейлист>");
+            }
+            else {
+                for (let i=0; i < playlists.length; i++) {
+                    var name;
+                    getPlaylist(msg.chat.id, playlists[i].id, (playlist) => {
+                        bot.sendMessage(
+                            msg.chat.id,
+                            playlist.name,
+                            {
+                                reply_markup: JSON.stringify({
+                                    inline_keyboard: [[{
+                                        text: "Отписаться",
+                                        callback_data: "unsubscribe " + playlists[i].id
+                                    }]]
+                                })
+                            }
+                        );
+                    });
+                }
+            }
+        }
+    );
+}
+
+function unsubscribe(chatId, playlistId) {
+    conn.query(`DELETE FROM playlists WHERE user_id=${chatId} AND id="${playlistId}";`, (err, result, fields) => {
+        console.log(err, result, fields);
     });
 }
 
@@ -194,11 +232,23 @@ const bot = new TelegramBot(config.get('App.telegram.token'), {polling: true});
 
 bot.onText(/\/start/, start);
 bot.onText(/\/add (.+)/, add);
-bot.onText(/\/update/, (msg, match) => {update()});
+bot.onText(/\/update/, update);
 bot.onText(/\/refresh/, (msg, match) => {refreshToken(msg.chat.id)});
-bot.onText(/\/check (.+)/, (msg, match) => {
-    const uri = match[1];
+bot.onText(/\/show/, show);
 
-    bot.sendMessage(msg.chat.id, match[1]);
+bot.on('callback_query', function (msg) {
+    const answer = msg.data.split(' ');
+    switch (answer[0]) {
+        case "unsubscribe":
+            getPlaylist(
+                msg.message.chat.id,
+                answer[1],
+                (playlist) => {
+                    unsubscribe(msg.message.chat.id, answer[1]);
+                    bot.answerCallbackQuery(msg.id, "Вы отписались от " + playlist.name, false);
+                }
+            );
+    }
 });
-// setInterval(update, 3000);
+bot.on("polling_error", console.log);
+setInterval(update, 5000);
