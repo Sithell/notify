@@ -231,10 +231,11 @@ const app = express();
 
 app.get('/', auth);
 
-app.listen(config.get('App.server.port'), () => {
-    console.log(`Server running at ${config.get('App.server.host')}:${config.get('App.server.port')}`)
-});
+const port = (process.env.NODE_ENV === 'production') ? process.env.PORT : config.get('App.server.port');
 
+app.listen(port, () => {
+    console.log(`Server running at ${config.get('App.server.host')}:${port}`)
+});
 
 // Bot
 const bot = new TelegramBot(config.get('App.telegram.token'), {polling: true});
