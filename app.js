@@ -8,30 +8,35 @@ const urlapi = require('url');
 
 
 function refreshToken(chatId) {
-    axios.post(
-        'https://accounts.spotify.com/api/token',
-        qs.stringify({
-            grant_type: 'refresh_token',
-            refresh_token: result[0].refresh_token
-        }),
-        {
-            headers: {
-                "Content-Type": "application/x-www-form-urlencoded"
-            },
-            auth: {
-                username: clientId,
-                password: clientSecret
-            }
-        }).then(response => {
-            const new_token = response.data.access_token;
-            conn.query(`UPDATE users SET access_token="${new_token}" WHERE chat_id=${chatId}`);
-    })
+    conn.query(
+        `SELECT * FROM users WHERE chat_id=${chatId}`,
+        (err, result, files) => {
+            axios.post(
+                'https://accounts.spotify.com/api/token',
+                qs.stringify({
+                    grant_type: 'refresh_token',
+                    refresh_token: result[0].refresh_token
+                }),
+                {
+                    headers: {
+                        "Content-Type": "application/x-www-form-urlencoded"
+                    },
+                    auth: {
+                        username: config.get('App.spotify.clientId'),
+                        password: config.get('App.spotify.clientSecret')
+                    }
+                }).then(response => {
+                const new_token = response.data.access_token;
+                conn.query(`UPDATE users SET access_token="${new_token}" WHERE chat_id=${chatId}`);
+            })
+        }
+    );
 }
 
 function lastUpdatedAt(playlist) {
     const tracks = playlist.tracks.items;
     let latest = 0;
-    for (i=0; i < tracks.length; i++) {
+    for (let i=0; i < tracks.length; i++) {
         if (Date.parse(tracks[i].added_at) > latest) {
             latest = Date.parse(tracks[i].added_at);
         }
@@ -41,6 +46,56 @@ function lastUpdatedAt(playlist) {
 
 function daysPassedSince(time) {
     return Math.ceil((Date.parse(new Date()) - time) / 1000 / 60 / 60 / 24);
+}
+function secondsPassedSince(time) {
+    return Math.ceil((Date.parse(new Date()) - time) / 1000 / 60);
+}
+function playlistId(uri) {
+    return urlapi.parse(uri).pathname.split('/')[2];
+}
+
+function update() {
+    conn.query(
+        'SELECT * FROM playlists',
+        (err, playlists, fields) => {
+            for (let i=0; i < playlists.length; i++) {
+                conn.query(
+                    `SELECT * FROM users WHERE chat_id=${playlists[i].user_id};`,
+                    (e, users, f) => {
+                        const playlist_id = playlistId(playlists[i].uri);
+                        axios.get(
+                            `https://api.spotify.com/v1/playlists/${playlist_id}`,
+                            {
+                                headers: {
+                                    "Authorization": `Bearer ${users[0].access_token}`
+                                }
+                            }
+                        ).then(response => {
+                            // response - плейлист полученный от spotify
+                            const lastTimeUpdated = lastUpdatedAt(response.data);
+                            const diff = Math.abs(playlists[i].updated_at - lastTimeUpdated);
+
+                            if (diff > 0) {
+                                bot.sendMessage(
+                                    users[0].chat_id,
+                                    `Плейлист ${response.data.name} обновился ${secondsPassedSince(lastTimeUpdated)} секунд назад`,
+                                    {
+                                        reply_markup: JSON.stringify({
+                                            inline_keyboard: [[{
+                                                text: "Открыть Spotify",
+                                                url: playlists[i].uri
+                                            }]]
+                                        })
+                                    }
+                                );
+                                conn.query(`UPDATE playlists SET updated_at=${lastTimeUpdated} WHERE user_id=${users[0].chat_id};`);
+                            }
+                        });
+                    }
+                );
+            }
+        }
+    );
 }
 
 // Bot commands
@@ -94,8 +149,6 @@ function add(msg, match) {
             bot.sendMessage(msg.chat.id, `В последний раз он обновлялся ${daysPassedSince(lastTimeUpdated)} дней назад`);
         });
     });
-
-    // bot.sendMessage(msg.chat.id, );
 }
 
 // Routes
@@ -152,8 +205,13 @@ app.listen(config.get('App.server.port'), () => {
     console.log(`Server running at ${config.get('App.server.host')}:${config.get('App.server.port')}`)
 });
 
+
 // Bot
 const bot = new TelegramBot(config.get('App.telegram.token'), {polling: true});
 
 bot.onText(/\/start/, start);
 bot.onText(/\/add (.+)/, add);
+bot.onText(/\/update/, (msg, match) => {update()});
+bot.onText(/\/refresh/, (msg, match) => {refreshToken(msg.chat.id)});
+
+setInterval(update, 3000);
